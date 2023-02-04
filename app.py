@@ -4,82 +4,14 @@ import soundcard as sc
 import soundfile as sf
 import speech_recognition as sr
 import time
-from PyQt5.QtWidgets import QApplication, QLabel, QMainWindow, QDesktopWidget
-from PyQt5.QtCore import QTimer, Qt, QSize
+from PyQt5.QtWidgets import QApplication, QLabel, QMainWindow, QDesktopWidget, QVBoxLayout, QWidget, QSizePolicy, QComboBox, QDialog, QFormLayout, QPushButton
+from PyQt5.QtCore import QTimer, Qt, QSize, QThread, pyqtSignal
 from googletrans import Translator
 
-class MainWindow(QMainWindow):
-    def __init__(self, translation):
-        super().__init__()
-        self.translation = translation
-        self.init_ui()
-
-    def init_ui(self):
-        self.setWindowTitle("Translation")
-        label = QLabel(self.translation, self)
-        label.setStyleSheet("font-size: 20pt;")  # adjust font size
-        label.setMargin(20)
-        self.setCentralWidget(label)
-        desktop = QDesktopWidget()
-        screen = desktop.screenGeometry(1) if desktop.screenCount() > 1 else desktop.screenGeometry()
-        size = self.geometry()
-        self.move(screen.left() + int((screen.width()-size.width())/2), screen.top() + int((screen.height()-size.height())/2))
-        self.resize(label.sizeHint() + QSize(40, 40))
 
 OUTPUT_FILE_NAME = "out.wav"    # file name.
 SAMPLE_RATE = 48000              # [Hz]. sampling rate.
-RECORD_SEC = 15                  # [sec]. duration recording audio.
-TARGET_LANGUAGE = "en"   # target language code
-
-def transcribe_audio(audio_stream,language):
-    r = sr.Recognizer()
-    with io.BytesIO(audio_stream) as f:
-        audio_file = sr.AudioFile(f)
-        with audio_file as source:
-            audio_data = r.record(source)
-    try:
-        transcription = r.recognize_google(audio_data, language=language)
-        print(f"Transcription: {transcription}")
-        return transcription
-    except Exception as e:
-        print(f"Error transcribing audio: {e}")
-        return None
-
-def translate_text(text):
-    if text is None:
-        return None
-    translator = Translator(service_urls=["translate.google.com"])
-    translated_text = translator.translate(text, dest=TARGET_LANGUAGE).text
-    print(f"Translation: {translated_text}")
-    return translated_text
-
-def run_translate_loop(language):
-    app = QApplication([])
-    while True:
-        # Record audio from the output device
-        with sc.get_microphone(id=str(sc.default_speaker().name), include_loopback=True).recorder(samplerate=SAMPLE_RATE) as mic:
-            # record audio with loopback from default speaker.
-            data = mic.record(numframes=SAMPLE_RATE * RECORD_SEC)
-            buffer = io.BytesIO()
-            sf.write(buffer, data[:, 0], samplerate=SAMPLE_RATE,format='wav')
-
-        # Transcribe the recorded audio
-        transcription = transcribe_audio(buffer.getvalue(),language)
-        try:
-            translation = translate_text(transcription)
-        except Exception as e:
-            retry_count = 0
-            max_retries = 3
-            while retry_count < max_retries:
-                retry_count += 1
-                print(f"Error translating audio, retrying... (attempt {retry_count} of {max_retries})")
-                try:
-                    translation = translate_text(transcription)
-                    break
-                except Exception as e:
-                    if retry_count == max_retries:
-                        print(f"Error transcribing audio: {e}")
-                        translation = "Error al traducir"
+RECORD_SEC = 10                  # [sec]. duration recording audio.
 
 language_codes = {
     "1": "en-US",
@@ -96,37 +28,150 @@ language_codes = {
     "12": "nl-NL"
 }
 
-print("Select Source language:")
-print("1. English (en-US)")
-print("2. French (fr-FR)")
-print("3. German (de-DE)")
-print("4. Spanish (es-ES)")
-print("5. Italian (it-IT)")
-print("6. Portuguese (pt-PT)")
-print("7. Russian (ru-RU)")
-print("8. Chinese (zh-CN)")
-print("9. Hindi (hi-IN)")
-print("10. Japanese (ja-JP)")
-print("11. Tagalog (fil-PH)")
-print("12. Dutch (nl-NL)")
-
-user_input = input("Enter number: ")
-language = language_codes.get(user_input)
-
 target_lang = {
     "1": "en",
     "2": "es",
+    "3": "fr",
+    "4": "de",
+    "5": "it",
+    "6": "pt",
+    "7": "ru",
+    "8": "zh",
+    "9": "hi",
+    "10": "ja",
+    "11": "fil",
+    "12": "nl"
 }
-print("Select Target language:")
-print("1. English (en-US)")
-print("2. Spanish (es-ES)")
 
-user_input = input("Enter number: ")
-TARGET_LANGUAGE = target_lang.get(user_input)
+class LanguageSelector(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Select languages")
 
-if language:
-    print(f"Selected language: {language}")
-else:
-    print("Invalid input")
+        # create form layout
+        layout = QFormLayout()
 
-run_translate_loop(language)
+        # create combo boxes
+        self.source_combo = QComboBox()
+        self.source_combo.addItems([f"{value}" for key, value in language_codes.items()])
+        layout.addRow("Source language:", self.source_combo)
+
+        self.target_combo = QComboBox()
+        self.target_combo.addItems([f"{value}" for key, value in target_lang.items()])
+        layout.addRow("Target language:", self.target_combo)
+
+        # create "Select" button
+        select_button = QPushButton("Select")
+        select_button.clicked.connect(self.accept)
+        layout.addRow(select_button)
+
+        self.setLayout(layout)
+
+    def get_selected_languages(self):
+        source_language = self.source_combo.currentText()
+        target_language = self.target_combo.currentText()
+        return source_language, target_language
+
+class Read(QThread):
+    stream_generated = pyqtSignal(io.BytesIO)
+
+    def run(self):
+        while True:
+            with sc.get_microphone(id=str(sc.default_speaker().name), include_loopback=True).recorder(samplerate=SAMPLE_RATE) as mic:
+                # record audio with loopback from default speaker.
+                data = mic.record(numframes=SAMPLE_RATE * RECORD_SEC)
+                buffer = io.BytesIO()
+                sf.write(buffer, data[:, 0], samplerate=SAMPLE_RATE,format='wav')
+            self.stream_generated.emit(buffer)
+
+
+class Process(QThread):
+    result_ready = pyqtSignal(str)
+    def __init__(self, selected,parent=None):
+        super().__init__(parent)
+        self.language, self.target = selected
+        print(selected)
+
+    def transcribe_audio(self, audio_stream):
+        r = sr.Recognizer()
+        with io.BytesIO(audio_stream) as f:
+            audio_file = sr.AudioFile(f)
+            with audio_file as source:
+                audio_data = r.record(source)
+        try:
+            transcription = r.recognize_google(audio_data, language=self.language)
+            print(f"Transcription: {transcription}")
+            return transcription
+        except Exception as e:
+            print(f"Error transcribing audio: {e}")
+            return None
+
+    def translate_text(self, text):
+        if text is None:
+            return None
+        translator = Translator(service_urls=["translate.google.com"])
+        translated_text = translator.translate(text, dest=self.target).text
+        print(f"Translation: {translated_text}")
+        return translated_text
+
+    def runloop(self, stream):
+        transcription = self.transcribe_audio(stream.getvalue())
+        try:
+            translation = self.translate_text(transcription)
+        except Exception as e:
+            retry_count = 0
+            max_retries = 5
+            while retry_count < max_retries:
+                retry_count += 1
+                print(f"Error translating audio, retrying... (attempt {retry_count} of {max_retries})")
+                try:
+                    translation = translate_text(transcription)
+                    break
+                except Exception as e:
+                    if retry_count == max_retries:
+                        print(f"Error transcribing audio: {e}")
+                        translation = "Error al traducir"
+        self.result_ready.emit(translation)
+
+
+class MainWindow(QMainWindow):
+    def __init__(self, selected,parent=None):
+        super().__init__(parent)
+
+        #self.show_language_selector()
+        self.label = QLabel("Waiting for translation...")
+        self.label.setStyleSheet("font-size: 20pt;")  # adjust font size
+        self.label.setWordWrap(True)
+        self.label.setAlignment(Qt.AlignCenter)
+        self.setWindowFlags(Qt.WindowStaysOnTopHint)
+        central_widget = QWidget()
+        layout = QVBoxLayout()
+        layout.addWidget(self.label)
+        central_widget.setLayout(layout)
+        self.setCentralWidget(central_widget)
+
+        self.Read_thread = Read()
+        self.Process_thread = Process(selected)
+        self.Read_thread.stream_generated.connect(self.Process_thread.runloop)
+        self.Process_thread.result_ready.connect(self.update_label)
+
+        self.Read_thread.start()
+
+    def update_label(self, result):
+        self.label.setText(str(result))
+        desktop = QDesktopWidget()
+        screen = desktop.screenGeometry(0)
+        max_width = int(screen.width() * 0.8)
+        self.resize(min(self.label.sizeHint().width(), max_width) + 40, self.label.sizeHint().height() + 40)
+        self.move(screen.left() + int((screen.width() - self.width()) / 2),
+                  screen.top() + int((screen.height() - self.height()) / 2))
+
+
+app = QApplication(sys.argv)
+selector = LanguageSelector()
+if selector.exec_() == QDialog.Accepted:
+    main_window = MainWindow(selector.get_selected_languages())
+    #main_window.setAttribute(Qt.WA_TranslucentBackground, True)
+    main_window.setWindowOpacity(0.5)
+    main_window.show()
+    sys.exit(app.exec_())
