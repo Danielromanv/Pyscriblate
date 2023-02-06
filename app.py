@@ -9,9 +9,9 @@ from PyQt5.QtCore import QTimer, Qt, QSize, QThread, pyqtSignal
 from googletrans import Translator
 
 
-OUTPUT_FILE_NAME = "out.wav"    # file name.
+OUTPUT_FILE_NAME = "out.wav"     # file name.
 SAMPLE_RATE = 48000              # [Hz]. sampling rate.
-RECORD_SEC = 10                  # [sec]. duration recording audio.
+RECORD_SEC = 6                   # [sec]. duration recording audio.
 
 language_codes = {
     "1": "en-US",
@@ -19,13 +19,17 @@ language_codes = {
     "3": "de-DE",
     "4": "es-ES",
     "5": "it-IT",
-    "6": "pt-PT",
-    "7": "ru-RU",
-    "8": "zh-CN",
-    "9": "hi-IN",
-    "10": "ja-JP",
-    "11": "fil-PH",
-    "12": "nl-NL"
+    "6": "pt-br",
+    "7": "pt-PT",
+    "8": "ru-RU",
+    "9": "zh-CN",
+    "10": "hi-IN",
+    "11": "ja-JP",
+    "12": "ko",
+    "13": "fil-PH",
+    "14": "nl-NL",
+    "15": "nl-NL"
+
 }
 
 target_lang = {
@@ -36,11 +40,12 @@ target_lang = {
     "5": "it",
     "6": "pt",
     "7": "ru",
-    "8": "zh",
+    "8": "zh-CN",
     "9": "hi",
     "10": "ja",
-    "11": "fil",
-    "12": "nl"
+    "11": "ko",
+    "12": "fil",
+    "13": "nl"
 }
 
 class LanguageSelector(QDialog):
@@ -60,13 +65,20 @@ class LanguageSelector(QDialog):
         self.target_combo.addItems([f"{value}" for key, value in target_lang.items()])
         layout.addRow("Target language:", self.target_combo)
 
+        self.record_sec = QComboBox()
+        for i in range(5, 21):
+            self.record_sec.addItem(str(i))
+        layout.addRow("Recording seconds", self.record_sec)
+
         # create "Select" button
         select_button = QPushButton("Select")
         select_button.clicked.connect(self.accept)
         layout.addRow(select_button)
 
         self.setLayout(layout)
-
+    def get_seconds(self):
+        seconds = int(self.record_sec.currentText())
+        return seconds
     def get_selected_languages(self):
         source_language = self.source_combo.currentText()
         target_language = self.target_combo.currentText()
@@ -74,12 +86,15 @@ class LanguageSelector(QDialog):
 
 class Read(QThread):
     stream_generated = pyqtSignal(io.BytesIO)
+    def __init__(self, seconds,parent=None):
+        super().__init__(parent)
+        self.seconds = seconds
 
     def run(self):
         while True:
             with sc.get_microphone(id=str(sc.default_speaker().name), include_loopback=True).recorder(samplerate=SAMPLE_RATE) as mic:
                 # record audio with loopback from default speaker.
-                data = mic.record(numframes=SAMPLE_RATE * RECORD_SEC)
+                data = mic.record(numframes=SAMPLE_RATE * self.seconds)
                 buffer = io.BytesIO()
                 sf.write(buffer, data[:, 0], samplerate=SAMPLE_RATE,format='wav')
             self.stream_generated.emit(buffer)
@@ -108,7 +123,7 @@ class Process(QThread):
 
     def translate_text(self, text):
         if text is None:
-            return None
+            return "Transcription Error"
         translator = Translator(service_urls=["translate.google.com"])
         translated_text = translator.translate(text, dest=self.target).text
         print(f"Translation: {translated_text}")
@@ -135,7 +150,7 @@ class Process(QThread):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, selected,parent=None):
+    def __init__(self, selected, seconds,parent=None):
         super().__init__(parent)
 
         #self.show_language_selector()
@@ -149,8 +164,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.label)
         central_widget.setLayout(layout)
         self.setCentralWidget(central_widget)
+        desktop = QDesktopWidget()
+        self.screen = desktop.screenGeometry(0)
+        self.move(self.screen.left() + int((self.screen.width() - self.width()) / 2),
+                  self.screen.top() + int((self.screen.height() - self.height()) / 2))
 
-        self.Read_thread = Read()
+        self.Read_thread = Read(seconds)
         self.Process_thread = Process(selected)
         self.Read_thread.stream_generated.connect(self.Process_thread.runloop)
         self.Process_thread.result_ready.connect(self.update_label)
@@ -159,18 +178,14 @@ class MainWindow(QMainWindow):
 
     def update_label(self, result):
         self.label.setText(str(result))
-        desktop = QDesktopWidget()
-        screen = desktop.screenGeometry(0)
-        max_width = int(screen.width() * 0.8)
+        max_width = int(self.screen.width() * 0.8)
         self.resize(min(self.label.sizeHint().width(), max_width) + 40, self.label.sizeHint().height() + 40)
-        self.move(screen.left() + int((screen.width() - self.width()) / 2),
-                  screen.top() + int((screen.height() - self.height()) / 2))
 
 
 app = QApplication(sys.argv)
 selector = LanguageSelector()
 if selector.exec_() == QDialog.Accepted:
-    main_window = MainWindow(selector.get_selected_languages())
+    main_window = MainWindow(selector.get_selected_languages(),selector.get_seconds())
     #main_window.setAttribute(Qt.WA_TranslucentBackground, True)
     main_window.setWindowOpacity(0.5)
     main_window.show()
